@@ -40,7 +40,7 @@ export const AdminLogin: React.FC = () => {
         const { error } = await signUp(email.trim(), password);
         
         if (error) {
-          if (error.message.includes('already registered')) {
+          if (error.message.includes('already registered') || error.message.includes('email-already-in-use')) {
             toast.error('An admin user already exists. Please sign in instead.');
             setIsSignUp(false);
           } else {
@@ -56,7 +56,7 @@ export const AdminLogin: React.FC = () => {
         const { error } = await signIn(email.trim(), password);
         
         if (error) {
-          if (error.message.includes('Invalid login credentials')) {
+          if (error.message.includes('invalid-credential') || error.message.includes('user-not-found') || error.message.includes('wrong-password')) {
             toast.error('Invalid email or password');
           } else {
             toast.error(error.message || 'Login failed');
@@ -166,6 +166,19 @@ export const AdminLogin: React.FC = () => {
           </Button>
         </form>
 
+        <div className="text-center">
+          <button
+            type="button"
+            onClick={handleToggleMode}
+            className="text-sm text-blue-400 hover:text-blue-300 transition-colors"
+            disabled={loading}
+          >
+            {isSignUp 
+              ? 'Already have an account? Sign in' 
+              : 'Need to create an admin account? Sign up'
+            }
+          </button>
+        </div>
 
       </Card>
     </div>

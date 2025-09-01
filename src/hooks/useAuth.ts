@@ -1,75 +1,75 @@
 import { useState, useEffect } from 'react';
-import { User } from '@supabase/supabase-js';
-import { supabase } from '../utils/supabase';
+import { 
+  User,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  signOut as firebaseSignOut,
+  onAuthStateChanged
+} from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { auth, db } from '../utils/firebase';
 
 export const useAuth = () => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Get initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setUser(user);
       setLoading(false);
     });
 
-    // Listen for auth changes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, session) => {
-        setUser(session?.user ?? null);
-        setLoading(false);
-      }
-    );
-
-    return () => subscription.unsubscribe();
+    return () => unsubscribe();
   }, []);
 
   const signIn = async (email: string, password: string) => {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-    return { data, error };
+    try {
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      return { data: userCredential, error: null };
+    } catch (error: any) {
+      return { data: null, error };
+    }
   };
 
   const signUp = async (email: string, password: string) => {
-    // First check if any users exist
-    const adminExists = await checkAdminExists();
-    if (adminExists) {
-      return { 
-        data: null, 
-        error: { message: 'An admin user is already registered' } 
-      };
-    }
-
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: undefined, // Disable email confirmation for admin
+    try {
+      // First check if any admin exists
+      const adminExists = await checkAdminExists();
+      if (adminExists) {
+        return { 
+          data: null, 
+          error: { message: 'An admin user is already registered' } 
+        };
       }
-    });
-    return { data, error };
+
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      
+      // Save this user as the admin in Firestore
+      await setDoc(doc(db, 'app_settings', 'admin_config'), {
+        adminUserId: userCredential.user.uid,
+        adminEmail: email,
+        createdAt: new Date().toISOString()
+      });
+
+      return { data: userCredential, error: null };
+    } catch (error: any) {
+      return { data: null, error };
+    }
   };
 
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    return { error };
+    try {
+      await firebaseSignOut(auth);
+      return { error: null };
+    } catch (error: any) {
+      return { error };
+    }
   };
 
   const checkAdminExists = async (): Promise<boolean> => {
     try {
-      // Try to get user count from auth.users (this requires service role)
-      // Since we can't access auth.users directly, we'll use a different approach
-      // We'll check if there are any authenticated sessions or use a different method
-      
-      // For now, we'll allow signup if no current user exists
-      // In production, you might want to implement a more robust check
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      // This is a simple check - in production you might want to maintain
-      // an admin_users table or use Supabase's admin API
-      return false; // Allow signup for now
+      const adminDoc = await getDoc(doc(db, 'app_settings', 'admin_config'));
+      return adminDoc.exists();
     } catch (error) {
       console.error('Error checking admin existence:', error);
       return false; // Allow signup on error

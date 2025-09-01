@@ -16,6 +16,8 @@
     "@fontsource/poppins": "^5.2.6",
     "@supabase/supabase-js": "^2.38.0",
     "bcryptjs": "^2.4.3",
+    "firebase": "^10.7.1",
+    "firebase": "^12.2.1",
     "lucide-react": "^0.344.0",
     "qrcode": "^1.5.3",
     "react": "^18.3.1",
