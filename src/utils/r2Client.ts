@@ -1,5 +1,9 @@
-import { S3Client, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, GetObjectCommand, DeleteObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import bcrypt from 'bcryptjs';
+import { createFile } from './firestore';
+import { checkRateLimit, getUserIP } from './rateLimiting';
+import { FileRecord } from '../types';
 
 // R2 Client setup
 const r2Client = new S3Client({
@@ -12,59 +16,101 @@ const r2Client = new S3Client({
 });
 
 const BUCKET_NAME = import.meta.env.VITE_R2_BUCKET;
+const MAX_FILE_SIZE = 250 * 1024 * 1024; // 250MB
 
 /**
- * Upload file to R2 via Supabase Edge Function (with progress tracking)
+ * Upload file to R2 and save metadata to Firestore
  */
-export const uploadToR2 = (
+export const uploadToR2 = async (
   file: File,
   password?: string,
   onProgress?: (progress: number) => void
 ): Promise<{ fileId: string; downloadUrl: string }> => {
-  return new Promise((resolve, reject) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('originalFilename', file.name);
-    if (password) {
-      formData.append('password', password);
+  try {
+    // Get user IP
+    const userIP = await getUserIP();
+    
+    // Check rate limiting
+    const rateCheck = await checkRateLimit(userIP);
+    if (!rateCheck.allowed) {
+      throw new Error('Upload limit exceeded. Try again tomorrow.');
     }
 
-    const xhr = new XMLHttpRequest();
+    // Validate file size
+    if (file.size > MAX_FILE_SIZE) {
+      throw new Error('File size exceeds 250MB limit');
+    }
 
-    // Handle progress
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable && onProgress) {
-        const percent = Math.round((event.loaded / event.total) * 100);
-        onProgress(percent);
-      }
+    // Generate unique object key
+    const timestamp = Date.now();
+    const randomId = Math.random().toString(36).substring(2);
+    const objectKey = `${timestamp}-${randomId}-${file.name}`;
+
+    // Simulate progress for user feedback
+    if (onProgress) {
+      onProgress(10);
+    }
+
+    // Convert file to ArrayBuffer for R2 upload
+    const fileBuffer = await file.arrayBuffer();
+    
+    if (onProgress) {
+      onProgress(30);
+    }
+
+    // Upload to R2
+    const putCommand = new PutObjectCommand({
+      Bucket: BUCKET_NAME,
+      Key: objectKey,
+      Body: new Uint8Array(fileBuffer),
+      ContentType: file.type,
+    });
+
+    await r2Client.send(putCommand);
+    
+    if (onProgress) {
+      onProgress(70);
+    }
+
+    // Hash password if provided
+    let passwordHash: string | undefined;
+    if (password && password.trim()) {
+      passwordHash = await bcrypt.hash(password.trim(), 10);
+    }
+
+    // Calculate expiry date (3 days from now)
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 3);
+
+    // Save metadata to Firestore
+    const fileData: Omit<FileRecord, 'id'> = {
+      original_filename: file.name,
+      r2_object_key: objectKey,
+      password_hash: passwordHash,
+      uploader_ip: userIP,
+      file_size: file.size,
+      content_type: file.type,
+      download_count: 0,
+      is_active: true,
+      expires_at: expiresAt.toISOString(),
+      created_at: new Date().toISOString()
     };
 
-    // Handle success
-    xhr.onload = () => {
-      try {
-        const res = JSON.parse(xhr.responseText);
-        if (xhr.status >= 200 && xhr.status < 300) {
-          resolve({
-            fileId: res.fileId,
-            downloadUrl: res.downloadUrl,
-          });
-        } else {
-          reject(new Error(res.error || 'Upload failed'));
-        }
-      } catch (err) {
-        reject(new Error('Invalid response'));
-      }
+    const fileId = await createFile(fileData);
+    
+    if (onProgress) {
+      onProgress(100);
+    }
+
+    return {
+      fileId,
+      downloadUrl: `${window.location.origin}/file/${fileId}`
     };
 
-    // Handle error
-    xhr.onerror = () => {
-      reject(new Error('Network error'));
-    };
-
-    xhr.open('POST', import.meta.env.VITE_UPLOAD_FUNCTION);
-    xhr.setRequestHeader('Authorization', `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`);
-    xhr.send(formData);
-  });
+  } catch (error) {
+    console.error('Upload error:', error);
+    throw error;
+  }
 };
 
 /**

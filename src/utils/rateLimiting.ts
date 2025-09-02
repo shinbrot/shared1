@@ -1,68 +1,41 @@
-import { supabase } from './supabase';
+import { getRateLimit, createRateLimit, updateRateLimit } from './firestore';
 
 export const checkRateLimit = async (ipAddress: string): Promise<{ allowed: boolean; remainingUploads: number }> => {
   try {
     const today = new Date().toISOString().split('T')[0];
     
-    // Get or create rate limit record
-    const { data: rateLimit, error } = await supabase
-      .from('upload_rate_limits')
-      .select('*')
-      .eq('ip_address', ipAddress)
-      .maybeSingle();
-
-    if (error) {
-      throw error;
-    }
+    // Get rate limit record
+    const rateLimit = await getRateLimit(ipAddress);
 
     if (!rateLimit) {
       // First upload for this IP
-      await supabase
-        .from('upload_rate_limits')
-        .insert({
-          ip_address: ipAddress,
-          upload_count: 1,
-          last_upload_date: today
-        });
-      
-      return { allowed: true, remainingUploads: 2 };
+      await createRateLimit(ipAddress);
+      return { allowed: true, remainingUploads: 9 }; // 10 total - 1 used = 9 remaining
     }
 
     // Check if it's a new day
     if (rateLimit.last_upload_date !== today) {
       // Reset count for new day
-      await supabase
-        .from('upload_rate_limits')
-        .update({
-          upload_count: 1,
-          last_upload_date: today
-        })
-        .eq('ip_address', ipAddress);
-      
-      return { allowed: true, remainingUploads: 2 };
+      await updateRateLimit(rateLimit.id, 1, today);
+      return { allowed: true, remainingUploads: 9 };
     }
 
     // Check if limit exceeded
-    if (rateLimit.upload_count >= 15) {
+    if (rateLimit.upload_count >= 10) {
       return { allowed: false, remainingUploads: 0 };
     }
 
     // Increment count
-    await supabase
-      .from('upload_rate_limits')
-      .update({
-        upload_count: rateLimit.upload_count + 1
-      })
-      .eq('ip_address', ipAddress);
+    await updateRateLimit(rateLimit.id, rateLimit.upload_count + 1);
 
     return { 
       allowed: true, 
-      remainingUploads: 15 - (rateLimit.upload_count + 1) 
+      remainingUploads: 10 - (rateLimit.upload_count + 1) 
     };
   } catch (error) {
     console.error('Rate limiting error:', error);
     // Allow upload on error to avoid blocking legitimate users
-    return { allowed: true, remainingUploads: 3 };
+    return { allowed: true, remainingUploads: 10 };
   }
 };
 

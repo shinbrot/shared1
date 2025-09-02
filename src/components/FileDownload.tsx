@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
-import { supabase } from '../utils/supabase';
+import { getFileById, updateFileDownloadCount } from '../utils/firestore';
 import { getSignedDownloadUrl } from '../utils/r2Client';
 import { formatFileSize, getFileIcon } from '../utils/fileValidation';
 import { FileRecord } from '../types';
@@ -33,30 +33,27 @@ export const FileDownload: React.FC = () => {
 
   const fetchFileInfo = async () => {
     try {
-      const { data, error } = await supabase
-        .from('files')
-        .select('*')
-        .eq('id', id)
-        .eq('is_active', true)
-        .single();
+      const fileData = await getFileById(id!);
 
-      if (error) {
-        if (error.code === 'PGRST116') {
-          setError('File not found or has expired');
-        } else {
-          setError('Failed to load file information');
-        }
+      if (!fileData) {
+        setError('File not found or has expired');
         return;
       }
 
       // Check if file has expired
-      if (new Date(data.expires_at) < new Date()) {
+      if (new Date(fileData.expires_at) < new Date()) {
         setError('This file has expired');
         return;
       }
 
-      setFile(data);
-      setPasswordRequired(!!data.password_hash);
+      // Check if file is active
+      if (!fileData.is_active) {
+        setError('This file is no longer available');
+        return;
+      }
+
+      setFile(fileData);
+      setPasswordRequired(!!fileData.password_hash);
     } catch (err) {
       console.error('Error fetching file:', err);
       setError('Failed to load file information');
@@ -87,10 +84,7 @@ export const FileDownload: React.FC = () => {
       const downloadUrl = await getSignedDownloadUrl(file.r2_object_key);
 
       // Update download count
-      await supabase
-        .from('files')
-        .update({ download_count: file.download_count + 1 })
-        .eq('id', file.id);
+      await updateFileDownloadCount(file.id);
 
       // Start download
       const link = document.createElement('a');

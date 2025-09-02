@@ -1,6 +1,6 @@
 # Secure File Sharing Platform
 
-A modern, secure file sharing platform built with React, TypeScript, and Firebase authentication. Features include large file uploads (up to 250MB), optional password protection, automatic expiry, and an admin dashboard.
+A modern, secure file sharing platform built with React, TypeScript, and Firebase. Features include large file uploads (up to 250MB), optional password protection, automatic expiry, and an admin dashboard.
 
 ## Features
 
@@ -16,7 +16,7 @@ A modern, secure file sharing platform built with React, TypeScript, and Firebas
 
 - **Frontend**: React 18, TypeScript, Tailwind CSS
 - **Authentication**: Firebase Auth
-- **Database**: Supabase (PostgreSQL)
+- **Database**: Firebase Firestore
 - **File Storage**: Cloudflare R2
 - **Deployment**: Vercel/Netlify ready
 
@@ -27,20 +27,13 @@ A modern, secure file sharing platform built with React, TypeScript, and Firebas
 Create a `.env.local` file with the following variables:
 
 ```env
-# Supabase Configuration (for file storage and database)
-VITE_SUPABASE_URL=your_supabase_url
-VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
-
-# Cloudflare R2 Configuration
+# Cloudflare R2 Configuration (for file storage)
 VITE_R2_ENDPOINT=your_r2_endpoint
 VITE_R2_ACCESS_KEY=your_r2_access_key
 VITE_R2_SECRET_KEY=your_r2_secret_key
 VITE_R2_BUCKET=your_r2_bucket_name
 
-# Upload Function URL
-VITE_UPLOAD_FUNCTION=your_supabase_function_url/upload-file
-
-# Firebase Configuration (for authentication)
+# Firebase Configuration (for authentication and database)
 VITE_FIREBASE_API_KEY=your_firebase_api_key
 VITE_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
 VITE_FIREBASE_PROJECT_ID=your_project_id
@@ -66,29 +59,34 @@ service cloud.firestore {
       allow read: if true;
       allow write: if request.auth != null;
     }
+    
+    // Files collection
+    match /files/{fileId} {
+      allow read: if true; // Public read for file downloads
+      allow write: if request.auth != null; // Only authenticated admin can write
+    }
+    
+    // Rate limits collection
+    match /upload_rate_limits/{limitId} {
+      allow read, write: if true; // Public access for rate limiting
+    }
   }
 }
 ```
 
-### 3. Supabase Setup
-
-1. Create a Supabase project
-2. Run the migrations in the `supabase/migrations` folder
-3. Deploy the Edge Function in `supabase/functions/upload-file`
-
-### 4. Cloudflare R2 Setup
+### 3. Cloudflare R2 Setup
 
 1. Create an R2 bucket in Cloudflare Dashboard
 2. Generate API tokens with R2 permissions
 3. Configure CORS settings for your domain
 
-### 5. Install Dependencies
+### 4. Install Dependencies
 
 ```bash
 npm install
 ```
 
-### 6. Run Development Server
+### 5. Run Development Server
 
 ```bash
 npm run dev
@@ -112,15 +110,57 @@ npm run dev
 ## Architecture
 
 - **Authentication**: Firebase handles user authentication
-- **File Metadata**: Stored in Supabase PostgreSQL database
+- **Database**: Firebase Firestore stores file metadata and rate limiting data
 - **File Storage**: Files stored in Cloudflare R2 for fast global delivery
-- **Upload Processing**: Supabase Edge Functions handle file uploads
-- **Rate Limiting**: IP-based limits stored in database
+- **Upload Processing**: Client-side upload directly to R2 with metadata saved to Firestore
+- **Rate Limiting**: IP-based limits stored in Firestore
+
+## Data Structure
+
+### Firestore Collections
+
+#### `files` Collection
+```javascript
+{
+  id: "auto-generated-id",
+  original_filename: "example.pdf",
+  r2_object_key: "timestamp-randomid-filename",
+  password_hash: "bcrypt-hashed-password", // optional
+  created_at: "2025-01-18T10:00:00Z",
+  expires_at: "2025-01-21T10:00:00Z",
+  download_count: 0,
+  uploader_ip: "192.168.1.1",
+  uploader_email: "user@example.com", // optional
+  file_size: 1048576,
+  content_type: "application/pdf",
+  is_active: true
+}
+```
+
+#### `upload_rate_limits` Collection
+```javascript
+{
+  id: "auto-generated-id",
+  ip_address: "192.168.1.1",
+  upload_count: 5,
+  last_upload_date: "2025-01-18",
+  created_at: "2025-01-18T10:00:00Z"
+}
+```
+
+#### `app_settings/admin_config` Document
+```javascript
+{
+  adminUserId: "firebase-user-uid",
+  adminEmail: "admin@example.com",
+  createdAt: "2025-01-18T10:00:00Z"
+}
+```
 
 ## Security Features
 
 - Password protection using bcrypt hashing
-- Row Level Security (RLS) on database tables
+- Firebase security rules for data access control
 - Rate limiting to prevent abuse
 - Automatic file expiry
 - Secure signed URLs for downloads

@@ -37,3 +37,9 @@ export interface FileValidationResult {
   isValid: boolean;
   error?: string;
 }
+
+export interface AdminConfig {
+  adminUserId: string;
+  adminEmail: string;
+  createdAt: string;
+}

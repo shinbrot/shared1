@@ -4,10 +4,8 @@ import {
   Download, 
   Trash2, 
   Search, 
-  Filter,
   Calendar,
   HardDrive,
-  Users,
   LogOut,
   RefreshCw
 } from 'lucide-react';
@@ -15,7 +13,7 @@ import toast from 'react-hot-toast';
 import { Card } from './ui/Card';
 import { Button } from './ui/Button';
 import { Input } from './ui/Input';
-import { supabase } from '../utils/supabase';
+import { getAllFiles, deleteFile } from '../utils/firestore';
 import { deleteFromR2 } from '../utils/r2Client';
 import { formatFileSize, getFileIcon } from '../utils/fileValidation';
 import { useAuth } from '../hooks/useAuth';
@@ -36,19 +34,17 @@ export const AdminDashboard: React.FC = () => {
 
   useEffect(() => {
     fetchFiles();
-    fetchStats();
   }, []);
+
+  useEffect(() => {
+    calculateStats();
+  }, [files]);
 
   const fetchFiles = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('files')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setFiles(data || []);
+      const filesData = await getAllFiles();
+      setFiles(filesData);
     } catch (err) {
       console.error('Error fetching files:', err);
       toast.error('Failed to load files');
@@ -57,35 +53,25 @@ export const AdminDashboard: React.FC = () => {
     }
   };
 
-  const fetchStats = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('files')
-        .select('is_active, file_size, download_count, expires_at');
+  const calculateStats = () => {
+    const now = new Date();
+    const stats = files.reduce((acc, file) => {
+      const isActive = file.is_active && new Date(file.expires_at) > now;
+      
+      return {
+        totalFiles: acc.totalFiles + 1,
+        activeFiles: acc.activeFiles + (isActive ? 1 : 0),
+        totalSize: acc.totalSize + file.file_size,
+        totalDownloads: acc.totalDownloads + file.download_count
+      };
+    }, {
+      totalFiles: 0,
+      activeFiles: 0,
+      totalSize: 0,
+      totalDownloads: 0
+    });
 
-      if (error) throw error;
-
-      const now = new Date();
-      const stats = data.reduce((acc, file) => {
-        const isActive = file.is_active && new Date(file.expires_at) > now;
-        
-        return {
-          totalFiles: acc.totalFiles + 1,
-          activeFiles: acc.activeFiles + (isActive ? 1 : 0),
-          totalSize: acc.totalSize + file.file_size,
-          totalDownloads: acc.totalDownloads + file.download_count
-        };
-      }, {
-        totalFiles: 0,
-        activeFiles: 0,
-        totalSize: 0,
-        totalDownloads: 0
-      });
-
-      setStats(stats);
-    } catch (err) {
-      console.error('Error fetching stats:', err);
-    }
+    setStats(stats);
   };
 
   const handleDeleteFile = async (file: FileRecord) => {
@@ -97,17 +83,11 @@ export const AdminDashboard: React.FC = () => {
       // Delete from R2
       await deleteFromR2(file.r2_object_key);
       
-      // Delete from Supabase
-      const { error } = await supabase
-        .from('files')
-        .delete()
-        .eq('id', file.id);
-
-      if (error) throw error;
+      // Delete from Firestore
+      await deleteFile(file.id);
 
       toast.success('File deleted successfully');
       fetchFiles();
-      fetchStats();
     } catch (err) {
       console.error('Delete error:', err);
       toast.error('Failed to delete file');
